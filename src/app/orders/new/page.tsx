@@ -80,55 +80,64 @@ export default function NewOrderPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Nicht angemeldet.");
 
+      // Customer lookup is optional in Modul 0. The order remains valid
+      // when the customer has not yet been created in the customer master.
+      const { data: customer } = await supabase
+        .from("customers")
+        .select("id")
+        .eq("company_name", form.customerName)
+        .maybeSingle();
+
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert({
-          user_id: user.id,
           order_number: form.orderNumber,
-          customer_name: form.customerName,
-          product_name: form.productName,
-          quantity: Number(form.quantity),
-          sales_price: result.salesPrice,
-          status: "kalkuliert",
-          currency: "EUR",
+          customer_id: customer?.id ?? null,
+          title: form.productName,
+          description: `Kunde: ${form.customerName}`,
+          assigned_to: user.id,
+          status: "ANFRAGE",
         })
         .select("id")
         .single();
 
       if (orderError) throw orderError;
 
-      const { error: calculationError } = await supabase
-        .from("order_calculations")
-        .insert({
-          order_id: order.id,
-          version: 1,
-          product_name: form.productName,
-          format_width_mm: Number(form.width),
-          format_height_mm: Number(form.height),
-          material_name: form.materialName || null,
-          nutzen: Number(form.nutzen),
-          print_method: form.printMethod,
-          quantity: Number(form.quantity),
-          finishing: [],
-          material_cost: result.materialCost,
-          print_cost: result.printCost,
-          finishing_cost: result.finishingCost,
-          direct_cost: result.directCost,
-          db1_percent: Number(form.db1Percent),
-          db1_amount: result.db1Amount,
-          db2_percent: Number(form.db2Percent),
-          db2_amount: result.db2Amount,
-          sales_price: result.salesPrice,
-          margin_percent: result.marginPercent,
-          currency: "EUR",
-        });
+      const { data: saved, error: calculationError } = await supabase.rpc(
+        "save_order_calculation",
+        {
+          p_order_id: order.id,
+          p_product_name: form.productName,
+          p_quantity: Number(form.quantity),
+          p_width_mm: Number(form.width),
+          p_height_mm: Number(form.height),
+          p_material_id: null,
+          p_printing_method: form.printMethod,
+          p_format: `${form.width} x ${form.height} mm`,
+          p_colors: null,
+          p_print_sides: null,
+          p_copies_per_sheet: Number(form.nutzen),
+          p_sheets_required: Number(form.quantity),
+          p_material_cost: result.materialCost,
+          p_printing_cost: result.printCost,
+          p_finishing_cost: result.finishingCost,
+          p_setup_cost: 0,
+          p_external_cost: 0,
+          p_labor_cost: 0,
+          p_cost_total: result.directCost,
+          p_revenue: result.salesPrice,
+          p_db1: result.db1Amount,
+          p_db2: result.db2Amount,
+          p_margin_percent: result.marginPercent,
+        },
+      );
 
-      if (calculationError) {
-        await supabase.from("orders").delete().eq("id", order.id);
-        throw calculationError;
-      }
+      if (calculationError) throw calculationError;
 
-      setStatus(`Auftrag ${form.orderNumber} wurde mit Kalkulation gespeichert.`);
+      const savedCalculation = Array.isArray(saved) ? saved[0] : saved;
+      setStatus(
+        `Auftrag ${form.orderNumber} gespeichert · Kalkulation ${savedCalculation?.calculation_number ?? ""} · Verkaufspreis ${money.format(result.salesPrice)}`,
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Speichern fehlgeschlagen.");
     } finally {
@@ -142,7 +151,9 @@ export default function NewOrderPage() {
         <header className="mb-6">
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-neutral-500">Werbemühle-System</p>
           <h1 className="text-3xl font-semibold">Neuer Auftrag + Druckkalkulation</h1>
-          <p className="mt-2 text-neutral-600">Modul 0: Produkt → Format → Material → Nutzen → Druckverfahren → Menge → Weiterverarbeitung → DB1/DB2 → Verkaufspreis.</p>
+          <p className="mt-2 text-neutral-600">
+            Modul 0: Produkt → Format → Material → Nutzen → Druckverfahren → Menge → Weiterverarbeitung → DB1/DB2 → Verkaufspreis.
+          </p>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
