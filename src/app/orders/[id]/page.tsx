@@ -145,7 +145,7 @@ export default function OrderCalculationPage() {
         if (itemIds.length) {
           const { data, error } = await supabase
             .from("calculations")
-            .select("id, order_item_id, calculation_number, quantity, printing_method, format, copies_per_sheet, material_cost, printing_cost, finishing_cost, db1, db2, revenue, margin_percent, created_at")
+            .select("id, order_item_id, calculation_number, quantity, material_id, printing_method, format, copies_per_sheet, material_cost, printing_cost, finishing_cost, db1, db2, revenue, margin_percent, created_at")
             .in("order_item_id", itemIds)
             .order("created_at", { ascending: false });
           if (error) throw error;
@@ -176,7 +176,7 @@ export default function OrderCalculationPage() {
 
           setForm({
             productName: latestItem?.article_name ?? order.title ?? "",
-            materialId: "",
+            materialId: latest.material_id ?? "",
             width: width || String(latestItem?.width_mm ?? 210),
             height: height || String(latestItem?.height_mm ?? 297),
             nutzen: String(latest.copies_per_sheet ?? 1),
