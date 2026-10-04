@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { calculatePrintOrder, type PrintMethod } from "@/lib/print-calculation";
+import { calculateMaterialCost, calculateSheetLayout, type MaterialForCalculation } from "@/lib/material-calculation";
 
 type FormState = {
   orderNumber: string;
@@ -43,13 +44,13 @@ const money = new Intl.NumberFormat("de-AT", { style: "currency", currency: "EUR
 export default function NewOrderPage() {
   const [form, setForm] = useState(initialForm);
   const [status, setStatus] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false);\n  const [materials, setMaterials] = useState<MaterialForCalculation[]>([]);\n  const [materialId, setMaterialId] = useState("");
 
-  const result = useMemo(() => {
+  const selectedMaterial = materials.find((material) => material.id === materialId) ?? null;\n\n  const sheetLayout = useMemo(() => calculateSheetLayout(\n    Number(form.width), Number(form.height), Number(form.quantity),\n    selectedMaterial?.width_mm ?? null, selectedMaterial?.height_mm ?? null,\n  ), [form.width, form.height, form.quantity, selectedMaterial]);\n\n  const calculatedMaterialCost = useMemo(() => calculateMaterialCost(\n    sheetLayout, selectedMaterial?.purchase_price ?? null, selectedMaterial?.unit ?? null,\n  ), [sheetLayout, selectedMaterial]);\n\n  const result = useMemo(() => {
     try {
       return calculatePrintOrder({
         quantity: Number(form.quantity),
-        materialUnitCost: Number(form.materialUnitCost),
+        materialUnitCost: calculatedMaterialCost != null ? calculatedMaterialCost / Number(form.quantity) : Number(form.materialUnitCost),
         printUnitCost: Number(form.printUnitCost),
         finishingCost: Number(form.finishingCost),
         db1Percent: Number(form.db1Percent),
@@ -58,7 +59,7 @@ export default function NewOrderPage() {
     } catch {
       return null;
     }
-  }, [form]);
+  }, [form, calculatedMaterialCost]);
 
   const update = (key: keyof FormState, value: string) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -111,7 +112,7 @@ export default function NewOrderPage() {
           p_quantity: Number(form.quantity),
           p_width_mm: Number(form.width),
           p_height_mm: Number(form.height),
-          p_material_id: null,
+          p_material_id: materialId || null,
           p_printing_method: form.printMethod,
           p_format: `${form.width} x ${form.height} mm`,
           p_colors: null,
@@ -165,8 +166,8 @@ export default function NewOrderPage() {
               <label className="md:col-span-2">Produkt<input value={form.productName} onChange={(e) => update("productName", e.target.value)} /></label>
               <label>Breite mm<input type="number" value={form.width} onChange={(e) => update("width", e.target.value)} min="1" /></label>
               <label>Höhe mm<input type="number" value={form.height} onChange={(e) => update("height", e.target.value)} min="1" /></label>
-              <label>Material<input value={form.materialName} onChange={(e) => update("materialName", e.target.value)} placeholder="z. B. 300 g Bilderdruck" /></label>
-              <label>Nutzen<input type="number" value={form.nutzen} onChange={(e) => update("nutzen", e.target.value)} min="1" /></label>
+              <label>Material<select value={materialId} onChange={(e) => { const id = e.target.value; setMaterialId(id); const material = materials.find((item) => item.id === id); update("materialName", material?.name ?? ""); }}>{materials.length === 0 ? <option value="">Noch kein Materialkatalog</option> : <><option value="">Material wählen…</option>{materials.map((material) => <option key={material.id} value={material.id}>{material.name}{material.grammage_gsm ? ` · ${material.grammage_gsm} g/m²` : ""}</option>)}</>}</select></label>
+              <label>Nutzen<input type="number" value={sheetLayout?.copiesPerSheet || form.nutzen} onChange={(e) => update("nutzen", e.target.value)} min="1" /><span className="mt-1 block text-xs text-neutral-500">{sheetLayout ? `${sheetLayout.copiesPerSheet} Nutzen · ${sheetLayout.sheetsRequired} Bogen` : "Bogenformat des Materials fehlt"}</span></label>
               <label>Druckverfahren<select value={form.printMethod} onChange={(e) => update("printMethod", e.target.value as PrintMethod)}><option value="digitaldruck">Digitaldruck</option><option value="lfp">LFP</option></select></label>
               <label>Menge<input type="number" value={form.quantity} onChange={(e) => update("quantity", e.target.value)} min="1" /></label>
             </div>
