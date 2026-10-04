@@ -1,3 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+input, select {
+  @apply mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 outline-none transition focus:border-neutral-900 focus:ring-2 focus:ring-neutral-200;
+}
+
+label {
+  @apply text-sm font-medium text-neutral-700;
+}
