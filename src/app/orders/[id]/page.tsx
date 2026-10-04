@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { calculatePrintOrder, type PrintMethod } from "@/lib/print-calculation";
+import { calculateSheetLayout, calculateMaterialCost, type MaterialForCalculation } from "@/lib/material-calculation";
 
 type FormState = {
   productName: string;
@@ -12,6 +13,7 @@ type FormState = {
   nutzen: string;
   printMethod: PrintMethod;
   quantity: string;
+  materialId: string;
   materialUnitCost: string;
   printUnitCost: string;
   finishingCost: string;
@@ -26,6 +28,7 @@ const emptyForm: FormState = {
   nutzen: "1",
   printMethod: "digitaldruck",
   quantity: "100",
+  materialId: "",
   materialUnitCost: "0",
   printUnitCost: "0",
   finishingCost: "0",
@@ -42,15 +45,47 @@ export default function OrderCalculationPage() {
   const [orderNumber, setOrderNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [currentCalculation, setCurrentCalculation] = useState("");
+  const [materials, setMaterials] = useState<MaterialForCalculation[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+
+  const selectedMaterial = useMemo(
+    () => materials.find((material) => material.id === form.materialId) ?? null,
+    [materials, form.materialId],
+  );
+
+  const sheetLayout = useMemo(
+    () => selectedMaterial
+      ? calculateSheetLayout(
+          Number(form.width),
+          Number(form.height),
+          Number(form.quantity),
+          selectedMaterial.width_mm,
+          selectedMaterial.height_mm,
+        )
+      : null,
+    [selectedMaterial, form.width, form.height, form.quantity],
+  );
+
+  const automaticMaterialCost = useMemo(
+    () => calculateMaterialCost(
+      sheetLayout,
+      selectedMaterial?.purchase_price ?? null,
+      selectedMaterial?.unit ?? null,
+    ),
+    [sheetLayout, selectedMaterial],
+  );
+
+  const effectiveMaterialUnitCost = automaticMaterialCost != null && Number(form.quantity) > 0
+    ? automaticMaterialCost / Number(form.quantity)
+    : Number(form.materialUnitCost);
 
   const result = useMemo(() => {
     try {
       return calculatePrintOrder({
         quantity: Number(form.quantity),
-        materialUnitCost: Number(form.materialUnitCost),
+        materialUnitCost: effectiveMaterialUnitCost,
         printUnitCost: Number(form.printUnitCost),
         finishingCost: Number(form.finishingCost),
         db1Percent: Number(form.db1Percent),
@@ -59,7 +94,7 @@ export default function OrderCalculationPage() {
     } catch {
       return null;
     }
-  }, [form]);
+  }, [form, effectiveMaterialUnitCost]);
 
   const update = (key: keyof FormState, value: string) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -74,6 +109,13 @@ export default function OrderCalculationPage() {
         const supabase = createSupabaseBrowserClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Nicht angemeldet.");
+
+        const { data: materialRows, error: materialError } = await supabase
+          .from("materials")
+          .select("id,name,category,grammage_gsm,width_mm,height_mm,purchase_price,unit")
+          .eq("active", true)
+          .order("name");
+        if (materialError) throw materialError;
 
         const { data: order, error: orderError } = await supabase
           .from("orders")
@@ -117,6 +159,7 @@ export default function OrderCalculationPage() {
 
         if (!active) return;
 
+        setMaterials((materialRows ?? []) as MaterialForCalculation[]);
         setOrderNumber(order.order_number);
         setCustomerName(customer?.company_name ?? "");
         if (latest) {
@@ -133,6 +176,7 @@ export default function OrderCalculationPage() {
 
           setForm({
             productName: latestItem?.article_name ?? order.title ?? "",
+            materialId: "",
             width: width || String(latestItem?.width_mm ?? 210),
             height: height || String(latestItem?.height_mm ?? 297),
             nutzen: String(latest.copies_per_sheet ?? 1),
@@ -180,13 +224,13 @@ export default function OrderCalculationPage() {
         p_quantity: Number(form.quantity),
         p_width_mm: Number(form.width),
         p_height_mm: Number(form.height),
-        p_material_id: null,
+        p_material_id: form.materialId || null,
         p_printing_method: form.printMethod,
         p_format: `${form.width} x ${form.height} mm`,
         p_colors: null,
         p_print_sides: null,
-        p_copies_per_sheet: Number(form.nutzen),
-        p_sheets_required: Math.ceil(Number(form.quantity) / Number(form.nutzen)),
+        p_copies_per_sheet: sheetLayout?.copiesPerSheet || Number(form.nutzen),
+        p_sheets_required: sheetLayout?.sheetsRequired || Math.ceil(Number(form.quantity) / Number(form.nutzen)),
         p_material_cost: result.materialCost,
         p_printing_cost: result.printCost,
         p_finishing_cost: result.finishingCost,
@@ -231,14 +275,40 @@ export default function OrderCalculationPage() {
               <label className="md:col-span-2">Produkt<input value={form.productName} onChange={(e) => update("productName", e.target.value)} /></label>
               <label>Breite mm<input type="number" value={form.width} onChange={(e) => update("width", e.target.value)} min="1" /></label>
               <label>Höhe mm<input type="number" value={form.height} onChange={(e) => update("height", e.target.value)} min="1" /></label>
+              <label>Material
+                <select value={form.materialId} onChange={(e) => update("materialId", e.target.value)}>
+                  <option value="">Material manuell / kein Katalog</option>
+                  {materials.map((material) => (
+                    <option key={material.id} value={material.id}>
+                      {material.name}{material.grammage_gsm ? " · " + material.grammage_gsm + " g/m²" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>Nutzen<input type="number" value={form.nutzen} onChange={(e) => update("nutzen", e.target.value)} min="1" /></label>
               <label>Druckverfahren<select value={form.printMethod} onChange={(e) => update("printMethod", e.target.value as PrintMethod)}><option value="digitaldruck">Digitaldruck</option><option value="lfp">LFP</option></select></label>
               <label>Menge<input type="number" value={form.quantity} onChange={(e) => update("quantity", e.target.value)} min="1" /></label>
             </div>
 
+            <div className="mt-4 rounded-xl bg-neutral-100 p-4 text-sm">
+              {selectedMaterial ? (
+                <>
+                  <div className="font-semibold">{selectedMaterial.name}</div>
+                  <div className="mt-1 text-neutral-600">
+                    {selectedMaterial.width_mm ?? "?"} × {selectedMaterial.height_mm ?? "?"} mm · Einheit: {selectedMaterial.unit ?? "—"}
+                    {selectedMaterial.purchase_price != null ? " · EK " + money.format(Number(selectedMaterial.purchase_price)) : ""}
+                  </div>
+                  <div className="mt-2 font-medium">
+                    {sheetLayout?.copiesPerSheet ? sheetLayout.copiesPerSheet + " Nutzen · " + sheetLayout.sheetsRequired + " Bogen" : "Kein automatischer Nutzen möglich"}
+                    {automaticMaterialCost != null ? " · Material " + money.format(automaticMaterialCost) : ""}
+                  </div>
+                </>
+              ) : "Kein Material aus dem Katalog gewählt. Die Materialkosten werden aus dem manuellen Fallback übernommen."}
+            </div>
+
             <h2 className="mb-4 mt-8 text-lg font-semibold">Kosten & Weiterverarbeitung</h2>
             <div className="grid gap-4 md:grid-cols-3">
-              <label>Material €/Stk.<input type="number" step="0.0001" value={form.materialUnitCost} onChange={(e) => update("materialUnitCost", e.target.value)} min="0" /></label>
+              <label>Material €/Stk. Fallback<input type="number" step="0.0001" value={form.materialUnitCost} onChange={(e) => update("materialUnitCost", e.target.value)} min="0" /></label>
               <label>Druck €/Stk.<input type="number" step="0.0001" value={form.printUnitCost} onChange={(e) => update("printUnitCost", e.target.value)} min="0" /></label>
               <label>Weiterverarbeitung gesamt<input type="number" step="0.01" value={form.finishingCost} onChange={(e) => update("finishingCost", e.target.value)} min="0" /></label>
               <label>DB1 %<input type="number" step="0.01" value={form.db1Percent} onChange={(e) => update("db1Percent", e.target.value)} min="0" max="99.99" /></label>
